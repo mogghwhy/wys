@@ -1,10 +1,14 @@
-
-youtube_video_url = '' # put youtube video url between single quotes
+# put your youtube video url between single quotes
+youtube_video_url = '' 
 
 
 # Install packages
+# puttings this in the same cell because it needs to be executed before 
+# the rest of the code is executed, in case if connection to runtime is lost
+# a new blank runtime gets started that does not have these pre-installed
 !pip install git+https://github.com/openai/whisper.git
 !pip install yt-dlp
+
 
 # import python modules
 import os
@@ -12,21 +16,20 @@ from datetime import timedelta
 import yt_dlp
 import whisper
 
-src_dir = 'content'
-dst_dir = 'download'
+zip_archive_filename = 'captions'
+src_dir = 'input'
+dst_dir = 'output'
 ext = 'm4a'
 src_audio_extension = f".{ext}"
 
 # add work folders
-sourceFolderExists = os.path.exists(src_dir)
-destinationFolderExists = os.path.exists(dst_dir)
+work_folders = [src_dir, dst_dir]
 
-if not sourceFolderExists:
-  os.mkdir("content")
-if not destinationFolderExists:
-  os.mkdir("download")
+for folder in work_folders:
+  if not os.path.exists(folder):
+    os.mkdir(folder)
 
-class MyLogger(object):
+class MyYdlLogger(object):
     def debug(self, msg):
         pass
 
@@ -37,10 +40,12 @@ class MyLogger(object):
         print(msg)
 
 
-def my_hook(d):
+def my_ydl_progress_hook(d):
     #print(f"status {d['status']}")
+    if d['status'] == 'downloading':
+        print(f"{d['downloaded_bytes']} bytes downloaded")    
     if d['status'] == 'finished':
-        print('Done downloading, now converting ...')
+        print('Done downloading...')
 
 
 def transcribe(audio_file_list, src_dir, dst_dir):
@@ -50,7 +55,7 @@ def transcribe(audio_file_list, src_dir, dst_dir):
     for audio_file in audio_file_list:
         name_without_extension, file_extension = os.path.splitext(audio_file)
         # Load audio file
-        audio = whisper.load_audio(f"{src_dir}/{audio_file}")
+        audio = whisper.load_audio(os.path.join(f"{src_dir}",f"{audio_file}"))
 
         options = {
     "language": lang, # input language, if omitted is auto detected
@@ -65,19 +70,18 @@ def transcribe(audio_file_list, src_dir, dst_dir):
             text = segment['text']
             segmentId = segment['id']+1
             segment = f"{segmentId}\n{startTime} --> {endTime}\n{text[1:] if text[0] is ' ' else text}\n\n"
-
-            srtFilename = os.path.join(f"{dst_dir}",f"{filename}.srt")
+            srtFilename = os.path.join(f"{dst_dir}",f"{name_without_extension}.srt")
             with open(srtFilename, 'a', encoding='utf-8') as srtFile:
                 srtFile.write(segment)
 
 
-ydl = yt_dlp.YoutubeDL({'outtmpl': '%(id)s.%(ext)s'})
+ydl_opts = {'outtmpl': '%(id)s.%(ext)s'}
 
-with ydl:
+with yt_dlp.YoutubeDL(ydl_opts) as ydl:
     result = ydl.extract_info(
         youtube_video_url,
         download=False # We just want to extract the info
-    )
+    )  
 
 if 'entries' in result:
     # Can be a playlist or a list of videos
@@ -99,30 +103,23 @@ for format in formats:
   
 print(f"found audio with format_id {format_id}")
 
-
 ydl_opts = {
     'format': format_id,
-    'logger': MyLogger(),
-    'progress_hooks': [my_hook],
+    'logger': MyYdlLogger(),
+    'progress_hooks': [my_ydl_progress_hook],
+    'paths': {'home':src_dir}
 }
-
 
 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
     ydl.download([youtube_video_url])
 
-files = [f for f in os.listdir('.') if os.path.isfile(f)]
-for f in files:
-  filename, file_extension = os.path.splitext(f)
-  if file_extension == src_audio_extension:
-    print(f"found file {f}, moving to {src_dir}")
-    os.replace(f,os.path.join(src_dir, f))
+process_files = [f for f in os.listdir(src_dir) if os.path.isfile(os.path.join(src_dir, f))]
+print(f"list of files to process: {process_files}")
 
-filesToProcess = [f for f in os.listdir(src_dir) if os.path.isfile(os.path.join(src_dir, f))]
-print(f"filesToProcess: {filesToProcess}")
+transcribe(process_files, src_dir, dst_dir)
 
-transcribe(filesToProcess, src_dir, dst_dir)
+!zip -r {zip_archive_filename}.zip {dst_dir}
 
-!zip -r download.zip download
-
+# we can clean up installed packages if needed
 #uninstall packages
 #!pip uninstall --yes youtube-dl
